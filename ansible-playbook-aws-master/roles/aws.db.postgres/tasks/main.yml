@@ -1,0 +1,95 @@
+---
+
+# Database
+- name:               Create Postgres Security Group
+  ec2_group:
+    name:             "Postgres"
+    #tags:                              # Not Supported
+    #  Name: "name"
+    description:      "Port 5432 from VPC Private Subnets"
+    vpc_id:           "{{ vpc_id }}"
+    region:           "{{ aws_region }}"
+    profile:          "{{ aws_profile }}"
+    rules:
+      - proto: tcp
+        from_port: 5432
+        to_port: 5432
+        cidr_ip: "{{ private_subnet_az1_cidr }}"
+      - proto: tcp
+        from_port: 5432
+        to_port: 5432
+        cidr_ip: "{{ private_subnet_az2_cidr }}"
+      - proto: tcp
+        from_port: 5432
+        to_port: 5432
+        group_id: "{{ bastion_group_id }}"
+    state:            "present"
+  register: my_postgres_group
+
+- name:               Set Postgres Security Group ID in variable
+  set_fact:
+    postgres_group_id: "{{ my_postgres_group.group_id }}"
+
+# DB Subnet Group
+- name:               Create RDS subnet Group
+  rds_subnet_group:
+    name:             "{{ vpc_name }}"
+    description:      "All private subnets in VPC"
+    region:           "{{ aws_region }}"
+    profile:          "{{ aws_profile }}"
+    state:            "present"
+    subnets:
+     - "{{ private_subnet_az1_id }}"
+     - "{{ private_subnet_az2_id }}"
+
+# DB Setup
+- name:               Check Postgres on RDS Exists
+  rds:
+    command: facts
+    instance_name:    "postgres-{{ vpc_name | lower }}"
+    region:           "{{ aws_region }}"
+    profile:          "{{ aws_profile }}"
+  register: postgres_facts
+  ignore_errors: yes
+
+- debug: var=postgres_facts
+
+- name:               Setup Postgres on RDS
+  rds:
+    command:          "create"
+    instance_name:    "postgres-{{ vpc_name | lower }}"
+    instance_type:    "db.{{ postgres_instance_type }}"
+    profile:          "{{ aws_profile }}"
+    region:           "{{ aws_region }}"
+    subnet:           "{{ vpc_name }}"
+    db_engine:        "postgres"
+    upgrade:          "yes"
+    port:             5432
+    size:             50
+    backup_retention: 30
+    db_name:          "{{ org_name | lower }}"
+    username:         "{{ org_name | lower }}_admin"
+    password:         "{{ postgres_password }}"
+    vpc_security_groups:  "{{ postgres_group_id }}"  # csv
+  when: postgres_facts.failed is defined
+
+- name:               Modify Postgres on RDS
+  rds:
+    command:          "modify"
+    instance_name:    "postgres-{{ vpc_name | lower }}"
+    instance_type:    "db.{{ postgres_instance_type }}"
+    profile:          "{{ aws_profile }}"
+    region:           "{{ aws_region }}"
+    #subnet:           "{{ vpc_name }}"
+    db_engine:        "postgres"
+    #upgrade:          "yes" # Not Supported
+    #port:             3306 # Not Supported
+    size:             50
+    backup_retention: 30
+    #db_name:          "{{ org_name | lower }}" # Not Supported
+    #username:         "{{ org_name | lower }}_admin" # not Supported
+    password:         "{{ postgres_password }}"
+    vpc_security_groups:  "{{ postgres_group_id }}"  # csv for some reason
+  when:
+    - postgres_facts.failed is not defined
+    - postgres_facts.instance.status == 'available'
